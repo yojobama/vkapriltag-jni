@@ -1,0 +1,8 @@
+{
+  global:
+    JNI_OnLoad;
+    JNI_OnUnload;
+    Java_org_photonvision_vkapriltag_*;
+  local:
+    *;
+};
