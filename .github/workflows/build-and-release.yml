@@ -1,0 +1,212 @@
+name: Build and release
+
+# Builds vkapriltag_jni for linuxarm64 (the shipped target - see
+# photon-core/build.gradle's comment on why only this platform is wired up
+# today) and linuxx86-64 (dev/CI parity; not yet consumed by photon-core),
+# then packages both the -jni (native) and -java artifacts in the same
+# Maven layout a real maven.photonvision.org publish would use - a plain jar
+# with linux/<arch>/shared/*.so inside for -jni, matching
+# rknn_jni-jni/tflite_jni-jni's own shape.
+#
+# On a tag push (v*), also publishes those jars as GitHub Release assets.
+# This is deliberately NOT a Maven repository (a GitHub Release has no
+# concept of one) - it's designed to be consumed via a Gradle `ivy`
+# repository with a custom patternLayout pointed at the release download
+# URLs, which is fully anonymous (no token needed to resolve), unlike
+# GitHub Packages' Maven registry.
+#
+# What this workflow does NOT do: actually exercise Vulkan detection.
+# GitHub-hosted runners (arm64 included) have no GPU, so the smoke test
+# below only proves the .so loads and its exported JNI functions are
+# callable - isSupported() correctly returning false and enumerateDevices()
+# correctly returning zero devices is the expected, successful outcome here,
+# not a failure. Real detection is only exercised by
+# photon-core's VkAprilTagTest, and only on real Vulkan hardware.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+env:
+  # Keep this in sync with photonvision-vkapriltag's root build.gradle
+  # ext.openCVversion. A mismatch here reintroduces exactly the cv::Mat ABI
+  # risk this whole build path exists to avoid - see CMakeLists.txt's
+  # WPILIB_OPENCV_INCLUDE_DIR/WPILIB_OPENCV_LIB_DIR comment and
+  # VkAprilTagJNI.cpp's detect().
+  OPENCV_VERSION: "2027-4.13.0-3"
+  # Confirmed the correct repo path by hand (2026-08) - both
+  # .../ex-mvn/... (what photon-core's own build.gradle declares as a
+  # repository) and .../release-2027/... 404 for this artifact despite
+  # working for other WPILib artifacts. If a future OPENCV_VERSION 404s
+  # here, check this path before assuming the version itself moved.
+  FRCMAVEN_OPENCV_BASE: "https://frcmaven.wpi.edu/artifactory/thirdparty-mvn-release-local/org/wpilib/thirdparty/opencv/opencv-cpp"
+  JAVA_VERSION: "25"
+  ARTIFACT_VERSION: "0.1.0-local"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - classifier: linuxarm64
+            runner: ubuntu-24.04-arm
+            opencv_arch: arm64
+          - classifier: linuxx86-64
+            runner: ubuntu-24.04
+            opencv_arch: x86-64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y cmake glslang-tools libvulkan-dev
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Fetch WPILib-vendored OpenCV (headers + native)
+        run: |
+          set -euo pipefail
+          mkdir -p opencv/headers opencv/native
+          curl -fsSL "$FRCMAVEN_OPENCV_BASE/$OPENCV_VERSION/opencv-cpp-$OPENCV_VERSION-headers.zip" -o headers.zip
+          curl -fsSL "$FRCMAVEN_OPENCV_BASE/$OPENCV_VERSION/opencv-cpp-$OPENCV_VERSION-${{ matrix.opencv_arch }}.zip" -o native.zip
+          unzip -q headers.zip -d opencv/headers
+          unzip -q native.zip -d opencv/native
+          core_so="$(find opencv/native -name 'libopencv_core.so.*' | head -1)"
+          if [ -z "$core_so" ]; then
+            echo "::error::libopencv_core.so.* not found in the fetched OpenCV native zip" >&2
+            exit 1
+          fi
+          echo "OPENCV_LIB_DIR=$PWD/$(dirname "$core_so")" >> "$GITHUB_ENV"
+          echo "OPENCV_HEADERS_DIR=$PWD/opencv/headers" >> "$GITHUB_ENV"
+
+      - name: Generate JNI headers
+        run: bash scripts/generate_headers.sh build
+
+      - name: Configure
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DVKAPRILTAG_JNI_BUILD_TEST_SUPPORT=OFF \
+            -DWPILIB_OPENCV_INCLUDE_DIR="$OPENCV_HEADERS_DIR" \
+            -DWPILIB_OPENCV_LIB_DIR="$OPENCV_LIB_DIR" \
+            -DJAVA_HOME="$JAVA_HOME"
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Verify exported symbol surface
+        # The one CI gate that actually matters for correctness, not just
+        # "did it compile": every symbol this .so exports beyond the six
+        # intended JNI entry points is a potential collision with WPILib's
+        # own (unpatched, differently built) apriltag native library loaded
+        # into the same process - see the fork's plan writeup on why that
+        # matters. -fvisibility=hidden plus the version script should
+        # already guarantee this; this step is what actually proves it on
+        # every build instead of trusting the flags silently kept working.
+        run: |
+          set -euo pipefail
+          unexpected="$(nm -D --defined-only build/libvkapriltag_jni.so \
+            | grep -v -E 'Java_org_photonvision_vkapriltag_|JNI_OnLoad' || true)"
+          if [ -n "$unexpected" ]; then
+            echo "::error::Unexpected exported symbols (symbol-visibility hardening failed):"
+            echo "$unexpected"
+            exit 1
+          fi
+          echo "Exported symbols:"
+          nm -D --defined-only build/libvkapriltag_jni.so
+
+      - name: Package -jni artifact
+        run: |
+          set -euo pipefail
+          platform_dir="linux/${{ matrix.opencv_arch }}/shared"
+          mkdir -p "stage/jni/$platform_dir"
+          cp build/libvkapriltag_jni.so "stage/jni/$platform_dir/"
+          ( cd stage/jni && jar --create \
+              --file="$GITHUB_WORKSPACE/vkapriltag_jni-jni-$ARTIFACT_VERSION-${{ matrix.classifier }}.jar" \
+              linux )
+
+      - name: Package -java artifact (linuxarm64 only - platform independent)
+        if: matrix.classifier == 'linuxarm64'
+        run: |
+          set -euo pipefail
+          mkdir -p stage/java-classes
+          javac -d stage/java-classes src/main/java/org/photonvision/vkapriltag/*.java
+          ( cd stage/java-classes && jar --create \
+              --file="$GITHUB_WORKSPACE/vkapriltag_jni-java-$ARTIFACT_VERSION.jar" \
+              org/photonvision/vkapriltag )
+
+      - name: Smoke test - the .so loads and its JNI functions are callable
+        # No GPU on this runner, so isSupported()==false and
+        # enumerateDevices()==[] are the CORRECT results here, not failures -
+        # see the workflow-level comment. This step only proves the .so
+        # doesn't fail to load (missing symbols, wrong glibc, etc.) and that
+        # calling into it doesn't crash the JVM.
+        #
+        # The .so's RUNPATH is $ORIGIN (see CMakeLists.txt) - correct for the
+        # real deployment, where CombinedRuntimeLoader extracts every native
+        # resource (including WPILib's own libopencv_core.so.NNN) into one
+        # flat directory alongside it, but there's no such directory here.
+        # Copying the fetched OpenCV .so next to the build output before
+        # running reproduces exactly that layout for this one-off smoke
+        # test - found by actually running this step locally first: without
+        # the copy, System.load() fails with UnsatisfiedLinkError
+        # ("libopencv_core.so.NNN: cannot open shared object file"), not the
+        # graceful isSupported()==false this step expects.
+        run: |
+          set -euo pipefail
+          cp "$OPENCV_LIB_DIR"/libopencv_core.so.* build/
+          mkdir -p smoketest-classes
+          javac -d smoketest-classes src/main/java/org/photonvision/vkapriltag/*.java \
+            src/test/java/org/photonvision/vkapriltag/*.java
+          java -Dvkapriltag.jni.path="$PWD/build/libvkapriltag_jni.so" \
+               -Dvkapriltag.jni.testSupportPath="$PWD/build/libvkapriltag_jni.so" \
+               -cp smoketest-classes org.photonvision.vkapriltag.SmokeTest
+        # testSupportPath points at the same .so as jni.path deliberately:
+        # SmokeTest loads both paths unconditionally, but with no PGM
+        # argument here it never calls into OpenCvMatBridge (which is what
+        # the real test-support lib provides) - only isSupported()/
+        # enumerateDevices(), which live in the main library. Loading the
+        # same file twice is a harmless no-op for the JVM.
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vkapriltag_jni-${{ matrix.classifier }}
+          # Not scoped to *-${{ matrix.classifier }}*.jar: the -java jar
+          # (linuxarm64 leg only, see the step above) has no classifier in
+          # its filename at all, so that pattern would silently miss it.
+          # Each matrix leg runs in its own isolated workspace, so "every jar
+          # this leg happened to produce" is unambiguous and correct here.
+          path: vkapriltag_jni-*.jar
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create release and upload artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ls -la dist
+          gh release create "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes \
+            dist/*.jar
