@@ -56,8 +56,53 @@ endif()
 # that means this must link against the identical wpilibOpenCv artifact
 # version photon-core uses, not merely "some OpenCV" - a version mismatch
 # here is an ABI bug, not a build error.
-# ---------------------------------------------------------------------------
-find_package(OpenCV REQUIRED COMPONENTS core)
+#
+# find_package(OpenCV) only works against a real CMake package (an
+# OpenCVConfig.cmake) - a system OpenCV install has one, but the raw WPILib
+# artifact (org.wpilib.thirdparty.opencv:opencv-cpp) does not: it's just a
+# headers/ zip and a linux/arm64/shared/*.so zip with nothing else, matching
+# how photon-core itself consumes it (as a wpilibNatives dependency, not a
+# find_package()-able install). So there are two paths here, and only one of
+# them is safe for a real build:
+#
+# - WPILIB_OPENCV_INCLUDE_DIR + WPILIB_OPENCV_LIB_DIR set (both, together):
+#   builds an imported target directly from those paths, no find_package()
+#   involved. This is the ONLY path that can actually produce an
+#   ABI-correct artifact - see scripts/ci_fetch_wpilib_opencv.sh for how CI
+#   populates these from the exact opencv-cpp version photon-core's root
+#   build.gradle currently resolves.
+# - Neither set: falls back to find_package(OpenCV REQUIRED COMPONENTS
+#   core) against whatever OpenCV is installed on the machine. Convenient
+#   for local iteration (matches every command run by hand earlier in this
+#   project's history), but the resulting .so must never be shipped to
+#   PhotonVision - only ever used for local smoke-testing detect() logic
+#   against a throwaway cv::Mat.
+if(WPILIB_OPENCV_INCLUDE_DIR AND WPILIB_OPENCV_LIB_DIR)
+  file(GLOB _wpilib_opencv_core_so "${WPILIB_OPENCV_LIB_DIR}/libopencv_core.so.*")
+  list(LENGTH _wpilib_opencv_core_so _wpilib_opencv_core_so_count)
+  if(NOT _wpilib_opencv_core_so_count EQUAL 1)
+    message(FATAL_ERROR
+      "Expected exactly one libopencv_core.so.* under WPILIB_OPENCV_LIB_DIR="
+      "${WPILIB_OPENCV_LIB_DIR}, found ${_wpilib_opencv_core_so_count}: ${_wpilib_opencv_core_so}")
+  endif()
+
+  add_library(wpilib_opencv_core SHARED IMPORTED)
+  set_target_properties(wpilib_opencv_core PROPERTIES
+    IMPORTED_LOCATION "${_wpilib_opencv_core_so}"
+    INTERFACE_INCLUDE_DIRECTORIES "${WPILIB_OPENCV_INCLUDE_DIR}"
+  )
+  set(OpenCV_LIBS wpilib_opencv_core)
+  message(STATUS "Using WPILib-vendored OpenCV: ${_wpilib_opencv_core_so}")
+elseif(WPILIB_OPENCV_INCLUDE_DIR OR WPILIB_OPENCV_LIB_DIR)
+  message(FATAL_ERROR
+    "WPILIB_OPENCV_INCLUDE_DIR and WPILIB_OPENCV_LIB_DIR must both be set, or neither")
+else()
+  find_package(OpenCV REQUIRED COMPONENTS core)
+  message(WARNING
+    "Building against system OpenCV (found: ${OpenCV_VERSION}), not the WPILib-vendored "
+    "build photon-core actually links - this .so has a real ABI risk and must not be "
+    "shipped. Set -DWPILIB_OPENCV_INCLUDE_DIR/-DWPILIB_OPENCV_LIB_DIR for a real build.")
+endif()
 
 # Deliberately not find_package(JNI) - that module's default REQUIRED
 # behavior also demands libjawt/libjvm (AWT/JVM components), which a headless
@@ -117,6 +162,29 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   )
   set_target_properties(vkapriltag_jni PROPERTIES LINK_DEPENDS
     ${CMAKE_CURRENT_SOURCE_DIR}/src/main/native/cpp/exports.map)
+
+  # RUNPATH $ORIGIN, not an absolute path: without this, linking against
+  # wpilib_opencv_core (an IMPORTED target with an absolute build-tree
+  # IMPORTED_LOCATION, and no install() step here to fix that up) bakes the
+  # CI runner's own ephemeral build path into the shipped .so, which
+  # obviously doesn't exist on a PhotonVision coprocessor. $ORIGIN is correct
+  # instead because CombinedRuntimeLoader extracts every native resource -
+  # including WPILib's own libopencv_core.so.NNN - into one flat directory,
+  # so "next to me" is genuinely where the real one ends up at runtime,
+  # regardless of which machine built this .so.
+  #
+  # BUILD_RPATH the target property, not a raw -Wl,-rpath linker flag: CMake
+  # separately auto-appends every linked IMPORTED target's own directory to
+  # the RPATH by default (verified - a raw flag lands as
+  # RUNPATH=[$ORIGIN:/absolute/ci/build/path], the absolute half exactly as
+  # unusable as if $ORIGIN had never been added). Setting this property is
+  # what actually replaces CMake's computed RPATH instead of appending to it.
+  set_target_properties(vkapriltag_jni PROPERTIES
+    SKIP_BUILD_RPATH FALSE
+    BUILD_WITH_INSTALL_RPATH TRUE
+    BUILD_RPATH "$ORIGIN"
+    INSTALL_RPATH "$ORIGIN"
+  )
 endif()
 
 # ---------------------------------------------------------------------------
