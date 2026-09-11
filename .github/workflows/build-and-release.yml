@@ -73,11 +73,22 @@ jobs:
           java-version: ${{ env.JAVA_VERSION }}
 
       - name: Fetch WPILib-vendored OpenCV (headers + native)
+        # frcmaven.wpi.edu has 404d this exact, valid URL from GitHub-hosted
+        # runners on both CI runs to date (2026-08-31, 2026-09-11) despite
+        # the artifact existing and the identical request succeeding
+        # immediately from outside CI - almost certainly a transient
+        # Artifactory/CDN hiccup (redirects through a short-lived signed GCS
+        # URL) rather than a bad path. NOTE: do NOT "fix" this by spoofing a
+        # browser User-Agent - Artifactory serves its HTML UI page instead of
+        # the raw artifact to browser-like UAs, which silently corrupts the
+        # download (confirmed: -A "Mozilla/..." gets you an HTML page, not a
+        # zip). --retry handles the transient case without touching UA/Accept.
         run: |
           set -euo pipefail
           mkdir -p opencv/headers opencv/native
-          curl -fsSL "$FRCMAVEN_OPENCV_BASE/$OPENCV_VERSION/opencv-cpp-$OPENCV_VERSION-headers.zip" -o headers.zip
-          curl -fsSL "$FRCMAVEN_OPENCV_BASE/$OPENCV_VERSION/opencv-cpp-$OPENCV_VERSION-${{ matrix.opencv_arch }}.zip" -o native.zip
+          curl_args=(-fsSL --retry 5 --retry-all-errors --retry-delay 3)
+          curl "${curl_args[@]}" "$FRCMAVEN_OPENCV_BASE/$OPENCV_VERSION/opencv-cpp-$OPENCV_VERSION-headers.zip" -o headers.zip
+          curl "${curl_args[@]}" "$FRCMAVEN_OPENCV_BASE/$OPENCV_VERSION/opencv-cpp-$OPENCV_VERSION-${{ matrix.opencv_arch }}.zip" -o native.zip
           unzip -q headers.zip -d opencv/headers
           unzip -q native.zip -d opencv/native
           core_so="$(find opencv/native -name 'libopencv_core.so.*' | head -1)"
