@@ -16,7 +16,7 @@ endif()
 # see vkapriltag's EmbeddedShaders.h for why that matters to a JNI shim
 # specifically.
 # ---------------------------------------------------------------------------
-set(VKAPRILTAG_GIT_TAG "v1.1.0-embedded-shaders" CACHE STRING
+set(VKAPRILTAG_GIT_TAG "v1.3.1" CACHE STRING
     "vkapriltag tag to fetch")
 option(VKAPRILTAG_JNI_LOCAL_SOURCE
        "Build against a local vkapriltag checkout instead of fetching one (VKAPRILTAG_JNI_LOCAL_SOURCE_DIR)"
@@ -129,6 +129,8 @@ endif()
 add_library(vkapriltag_jni SHARED
   src/main/native/cpp/DetectorHandle.cpp
   src/main/native/cpp/VkAprilTagJNI.cpp
+  src/main/native/cpp/PoseEstimatorHandle.cpp
+  src/main/native/cpp/VkAprilTagPoseEstimatorJNI.cpp
 )
 
 target_include_directories(vkapriltag_jni PRIVATE
@@ -208,9 +210,13 @@ endif()
 # javac -h places the generated JNI headers here; VkAprilTagJNI.cpp includes
 # them by name. See build.gradle for how the real build drives javac, and
 # scripts/generate_headers.sh for how a plain CMake build does the same.
-if(NOT EXISTS ${CMAKE_CURRENT_BINARY_DIR}/jniheaders/org_photonvision_vkapriltag_VkAprilTagJNI.h)
-  message(FATAL_ERROR
-    "JNI headers not found under ${CMAKE_CURRENT_BINARY_DIR}/jniheaders - run "
-    "scripts/generate_headers.cmake (or javac -h) before configuring, or point "
-    "-DCMAKE_BINARY_DIR at a directory that already has them.")
-endif()
+foreach(_expected_header
+    org_photonvision_vkapriltag_VkAprilTagJNI.h
+    org_photonvision_vkapriltag_VkAprilTagPoseEstimatorJNI.h)
+  if(NOT EXISTS ${CMAKE_CURRENT_BINARY_DIR}/jniheaders/${_expected_header})
+    message(FATAL_ERROR
+      "JNI header ${_expected_header} not found under ${CMAKE_CURRENT_BINARY_DIR}/jniheaders - "
+      "run scripts/generate_headers.cmake (or javac -h) before configuring, or point "
+      "-DCMAKE_BINARY_DIR at a directory that already has them.")
+  endif()
+endforeach()

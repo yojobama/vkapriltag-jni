@@ -33,6 +33,7 @@ using photonvision::vkapriltag_jni::Detect;
 using photonvision::vkapriltag_jni::DetectorHandle;
 using photonvision::vkapriltag_jni::LastError;
 using photonvision::vkapriltag_jni::SetLastError;
+using photonvision::vkapriltag_jni::ValidateGeometry;
 
 namespace {
 
@@ -111,10 +112,14 @@ JNIEXPORT jobjectArray JNICALL Java_org_photonvision_vkapriltag_VkAprilTagJNI_en
 }
 
 JNIEXPORT jlong JNICALL Java_org_photonvision_vkapriltag_VkAprilTagJNI_create(
-    JNIEnv *env, jclass, jint width, jint height, jstring family, jint cpu_threads,
-    jint device_index) {
+    JNIEnv *env, jclass, jint width, jint height, jint decimation, jstring family,
+    jint cpu_threads, jint device_index) {
   if (width <= 0 || height <= 0) {
     SetLastError("width and height must be positive");
+    return 0;
+  }
+  if (decimation <= 0) {
+    SetLastError("decimation must be positive");
     return 0;
   }
 
@@ -124,13 +129,30 @@ JNIEXPORT jlong JNICALL Java_org_photonvision_vkapriltag_VkAprilTagJNI_create(
   env->ReleaseStringUTFChars(family, family_chars);
 
   std::unique_ptr<DetectorHandle> handle =
-      CreateDetector(static_cast<uint32_t>(width), static_cast<uint32_t>(height), family_name,
+      CreateDetector(static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+                    static_cast<uint32_t>(decimation), family_name,
                     static_cast<uint32_t>(cpu_threads), static_cast<int32_t>(device_index));
   if (handle == nullptr) return 0;
 
   // Ownership crosses into the raw jlong handle from here; destroy() below
   // is the only path that reclaims it.
   return reinterpret_cast<jlong>(handle.release());
+}
+
+JNIEXPORT jstring JNICALL Java_org_photonvision_vkapriltag_VkAprilTagJNI_validateGeometry(
+    JNIEnv *env, jclass, jint width, jint height, jint decimation) {
+  if (width <= 0 || height <= 0) {
+    return env->NewStringUTF("width and height must be positive");
+  }
+  if (decimation <= 0) {
+    return env->NewStringUTF("decimation must be positive");
+  }
+  std::string reason;
+  if (ValidateGeometry(static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+                       static_cast<uint32_t>(decimation), &reason)) {
+    return nullptr;
+  }
+  return env->NewStringUTF(reason.c_str());
 }
 
 JNIEXPORT jdoubleArray JNICALL Java_org_photonvision_vkapriltag_VkAprilTagJNI_detect(

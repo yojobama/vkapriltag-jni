@@ -15,8 +15,8 @@ import java.nio.file.Files;
  *
  * With no arguments, only {@link VkAprilTagJNI#isSupported} and {@link
  * VkAprilTagJNI#enumerateDevices} are exercised - both must work even with no GPU present. Pass a
- * PGM path (P5, 8-bit grayscale, width/height multiples of 8) to also exercise {@code create}/
- * {@code detect}/{@code destroy}.
+ * PGM path (P5, 8-bit grayscale, width/height evenly divisible by the decimation factor used
+ * below, 2) to also exercise {@code create}/{@code detect}/{@code destroy}.
  */
 public final class SmokeTest {
     private SmokeTest() {}
@@ -51,7 +51,7 @@ public final class SmokeTest {
         Pgm pgm = Pgm.read(pgmPath);
         System.out.println("Loaded " + pgmPath + " (" + pgm.width + "x" + pgm.height + ")");
 
-        long handle = VkAprilTagJNI.create(pgm.width, pgm.height, family, 0, -1);
+        long handle = VkAprilTagJNI.create(pgm.width, pgm.height, 2, family, 0, -1);
         if (handle == 0) {
             System.out.println("create() FAILED: " + VkAprilTagJNI.getLastError());
             System.exit(1);
@@ -81,11 +81,58 @@ public final class SmokeTest {
                         "  tag %d: hamming=%d margin=%.3f center=(%.2f, %.2f)%n",
                         id, hamming, margin, cx, cy);
             }
+
+            if (n > 0) {
+                runPoseSmokeCheck(result, pgm.width, pgm.height);
+            } else {
+                System.out.println("No tags detected; skipping pose estimator smoke check.");
+            }
         } finally {
             OpenCvMatBridge.releaseGray(matAddr);
             VkAprilTagJNI.destroy(handle);
         }
         System.out.println("destroy() done.");
+    }
+
+    /**
+     * Feeds detect()'s own flat output straight into VkAprilTagPoseEstimatorJNI, using
+     * placeholder intrinsics (not a real calibration) - this only checks that the JNI plumbing
+     * round-trips and produces finite, valid poses, not that the resulting pose is numerically
+     * meaningful for this particular image.
+     */
+    private static void runPoseSmokeCheck(double[] detectResult, int width, int height) {
+        double fx = width;  // arbitrary placeholder focal length, in pixels
+        double fy = width;
+        double cx = width / 2.0;
+        double cy = height / 2.0;
+        double tagsize = 0.1651;  // metres; arbitrary placeholder tag size
+
+        long poseHandle = VkAprilTagPoseEstimatorJNI.create(fx, fy, cx, cy, tagsize, 0);
+        if (poseHandle == 0) {
+            System.out.println(
+                    "PoseEstimator create() FAILED: " + VkAprilTagPoseEstimatorJNI.getLastError());
+            System.exit(1);
+        }
+        try {
+            double[] poses = VkAprilTagPoseEstimatorJNI.estimatePoses(poseHandle, detectResult);
+            if (poses == null) {
+                System.out.println(
+                        "estimatePoses() FAILED: " + VkAprilTagPoseEstimatorJNI.getLastError());
+                System.exit(1);
+            }
+            int n = (int) detectResult[0];
+            System.out.println("estimatePoses() -> " + poses.length + " doubles for " + n + " tag(s)");
+            for (int i = 0; i < n; i++) {
+                // Each tag's block is two 15-double poses (R[9], t[3], error, valid, iterations);
+                // the lower-error candidate is first, so just look at that one here.
+                int base = i * VkAprilTagPoseEstimatorJNI.DOUBLES_PER_TAG;
+                double error = poses[base + 9 + 3];
+                boolean valid = poses[base + 9 + 3 + 1] != 0.0;
+                System.out.printf("  tag %d: pose valid=%b error=%.6g%n", i, valid, error);
+            }
+        } finally {
+            VkAprilTagPoseEstimatorJNI.destroy(poseHandle);
+        }
     }
 
     private static String nativeLibraryPathOrThrow(String systemProperty, String... candidates) {

@@ -29,11 +29,20 @@ public class VkAprilTagJNI {
     public static native VkAprilTagDeviceInfo[] enumerateDevices();
 
     /**
-     * Creates a native detector for one fixed (width, height, family) configuration. The family's
-     * border polarity is read from the tag family itself; there is no separate parameter for it.
+     * Creates a native detector for one fixed (width, height, decimation, family) configuration.
+     * The family's border polarity is read from the tag family itself; there is no separate
+     * parameter for it.
      *
-     * @param width frame width in pixels; must be a multiple of 8
-     * @param height frame height in pixels; must be a multiple of 8
+     * @param width frame width in pixels; must be evenly divisible by {@code decimation}
+     * @param height frame height in pixels; must be evenly divisible by {@code decimation}
+     * @param decimation integer downsampling factor applied before thresholding/labelling; 1
+     *     disables decimation (full resolution), 2 was this library's old fixed behavior, 4
+     *     halves resolution again, etc. Must evenly divide both {@code width} and {@code height};
+     *     {@code 2*(width/decimation)} and {@code 2*(height/decimation)} must each be {@code <=
+     *     16383} (irrelevant at any realistic camera resolution). Fixed for the lifetime of the
+     *     returned handle - changing it requires destroying and recreating the detector, exactly
+     *     like changing family/resolution/device already does. See {@link #validateGeometry} to
+     *     pre-check a (width, height, decimation) triple without allocating a detector.
      * @param family an AprilTag family name recognized by the fetched {@code apriltag} C library,
      *     e.g. {@code "tag36h11"} or {@code "tag16h5"}
      * @param cpuThreads degree of parallelism for the CPU tail (quad fitting); 0 selects {@code
@@ -44,7 +53,19 @@ public class VkAprilTagJNI {
      *     check {@link #getLastError} for why
      */
     public static native long create(
-            int width, int height, String family, int cpuThreads, int deviceIndex);
+            int width, int height, int decimation, String family, int cpuThreads,
+            int deviceIndex);
+
+    /**
+     * Validates a (width, height, decimation) triple against the same requirements {@link
+     * #create} enforces internally, without allocating a detector. Useful for pre-validating a
+     * candidate configuration (e.g. before a settings change takes effect) so a doomed {@link
+     * #create} call - and the Vulkan {@code Context}/pipeline construction cost it would pay
+     * before failing - isn't paid just to learn the combination was invalid.
+     *
+     * @return null if the triple is valid; otherwise a human-readable reason it isn't
+     */
+    public static native String validateGeometry(int width, int height, int decimation);
 
     /**
      * Runs one frame of detection.

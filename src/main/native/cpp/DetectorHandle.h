@@ -34,6 +34,7 @@ struct DetectorHandle {
   bool reversed_border = false;
   uint32_t width = 0;
   uint32_t height = 0;
+  uint32_t decimation = 2;
 
   // detect() is not reentrant - GpuDetector/QuadDecode/TagDecoder all carry
   // state across their own single-frame call.
@@ -49,12 +50,25 @@ const std::string &LastError();
 void SetLastError(const std::string &message);
 void ClearLastError();
 
+// Checks (width, height, decimation) against vkapriltag's own GpuDetector
+// constructor requirements - width/height must each be evenly divisible by
+// decimation, and 2*(width/decimation)/2*(height/decimation) must each be
+// <= 16383 - without constructing anything. Returns true (and leaves
+// *reason untouched) if valid; returns false and fills *reason with a
+// human-readable explanation otherwise. Shared by CreateDetector (so the
+// common, expected failure produces a clean SetLastError() string instead
+// of relying solely on GpuDetector's constructor throwing) and by
+// VkAprilTagJNI_validateGeometry (so photon-core can pre-validate without
+// paying for a full detector allocation).
+bool ValidateGeometry(uint32_t width, uint32_t height, uint32_t decimation, std::string *reason);
+
 // Runs setup_tag_family() + apriltag_detector_create() + the GpuDetector/
 // QuadDecode/TagDecoder construction described in apps/apriltag_vulkan/
 // main.cpp. Returns nullptr (and sets the thread-local last error) on any
 // failure - never throws across the call site, since this is the last C++
 // frame before the JNI boundary.
 std::unique_ptr<DetectorHandle> CreateDetector(uint32_t width, uint32_t height,
+                                               uint32_t decimation,
                                                const std::string &family_name,
                                                uint32_t cpu_threads, int32_t device_index);
 

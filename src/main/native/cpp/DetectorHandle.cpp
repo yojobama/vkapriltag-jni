@@ -34,20 +34,43 @@ DetectorHandle::~DetectorHandle() {
   ctx.reset();
 }
 
+bool ValidateGeometry(uint32_t width, uint32_t height, uint32_t decimation, std::string *reason) {
+  if (decimation == 0) {
+    *reason = "decimation must be >= 1 (got 0)";
+    return false;
+  }
+  if (width % decimation != 0 || height % decimation != 0) {
+    *reason = "width and height must each be evenly divisible by decimation (got " +
+              std::to_string(width) + "x" + std::to_string(height) + " at decimation " +
+              std::to_string(decimation) + ")";
+    return false;
+  }
+  const uint32_t max_packed_x = 2u * (width / decimation);
+  const uint32_t max_packed_y = 2u * (height / decimation);
+  if (max_packed_x > 16383 || max_packed_y > 16383) {
+    *reason = "2*(width/decimation) and 2*(height/decimation) must each be <= 16383 (got " +
+              std::to_string(max_packed_x) + "x" + std::to_string(max_packed_y) + ")";
+    return false;
+  }
+  return true;
+}
+
 std::unique_ptr<DetectorHandle> CreateDetector(uint32_t width, uint32_t height,
+                                               uint32_t decimation,
                                                const std::string &family_name,
                                                uint32_t cpu_threads, int32_t device_index) {
   ClearLastError();
 
-  if (width % 8 != 0 || height % 8 != 0) {
-    SetLastError("width and height must both be multiples of 8 (got " + std::to_string(width) +
-                "x" + std::to_string(height) + ")");
+  std::string reason;
+  if (!ValidateGeometry(width, height, decimation, &reason)) {
+    SetLastError(reason);
     return nullptr;
   }
 
   auto handle = std::make_unique<DetectorHandle>();
   handle->width = width;
   handle->height = height;
+  handle->decimation = decimation;
   handle->family_name = family_name;
 
   try {
@@ -88,6 +111,7 @@ std::unique_ptr<DetectorHandle> CreateDetector(uint32_t width, uint32_t height,
     config.reversed_border = handle->family->reversed_border;
     config.normal_border = !handle->family->reversed_border;
     config.cpu_threads = cpu_threads;
+    config.decimation = decimation;
 
     handle->detector = std::make_unique<apriltag_vulkan::GpuDetector>(*handle->ctx, config);
     handle->quad_decode = std::make_unique<apriltag_vulkan::QuadDecode>(config);
