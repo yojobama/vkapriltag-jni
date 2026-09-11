@@ -28,6 +28,24 @@ set(VKAPRILTAG_BUILD_APPS OFF CACHE BOOL "" FORCE)
 set(VKAPRILTAG_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 set(VKAPRILTAG_EMBED_SHADERS ON CACHE BOOL "" FORCE)
 
+# vkapriltag builds as a static lib that ends up linked into
+# libvkapriltag_jni.so below, so it must be position-independent - without
+# this, x86-64 linking fails with "relocation ... can not be used when
+# making a shared object; recompile with -fPIC" (arm64 tolerates it, x86-64
+# doesn't). Must be set before FetchContent_MakeAvailable/add_subdirectory
+# so it applies to that target too.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+# vkapriltag's own AprilRobotics/apriltag FetchContent dependency defaults
+# to BUILD_SHARED_LIBS=ON upstream, which gives libvkapriltag_jni.so an
+# extra DT_NEEDED on libapriltag.so.3 that nothing in this repo's packaging
+# ships - CI's smoke test failed with exactly that UnsatisfiedLinkError.
+# Forcing static here (before the fetch, so it applies to that nested
+# dependency too) embeds apriltag directly, matching the "one self-
+# contained .so, no runtime deps beyond WPILib's own libs" design this
+# whole native shim exists for.
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+
 if(VKAPRILTAG_JNI_LOCAL_SOURCE)
   if(NOT VKAPRILTAG_JNI_LOCAL_SOURCE_DIR)
     message(FATAL_ERROR "VKAPRILTAG_JNI_LOCAL_SOURCE=ON requires VKAPRILTAG_JNI_LOCAL_SOURCE_DIR")
