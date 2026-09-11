@@ -43,6 +43,8 @@ env:
   # here, check this path before assuming the version itself moved.
   FRCMAVEN_OPENCV_BASE: "https://frcmaven.wpi.edu/artifactory/thirdparty-mvn-release-local/org/wpilib/thirdparty/opencv/opencv-cpp"
   JAVA_VERSION: "25"
+  # Overridden below (build job's first step) to the pushed tag on a v*
+  # release; this default only applies to non-tag builds (main/PRs).
   ARTIFACT_VERSION: "0.1.0-local"
 
 jobs:
@@ -65,6 +67,10 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Use the pushed tag as the artifact version on a release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: echo "ARTIFACT_VERSION=${{ github.ref_name }}" >> "$GITHUB_ENV"
 
       - name: Install build dependencies
         run: |
