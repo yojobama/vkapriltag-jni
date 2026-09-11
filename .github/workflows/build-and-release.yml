@@ -54,9 +54,14 @@ jobs:
           - classifier: linuxarm64
             runner: ubuntu-24.04-arm
             opencv_arch: arm64
+            # WPILib's frcmaven opencv-cpp classifiers are "linux<arch>", not
+            # bare "<arch>" - a mismatch here 404s the native.zip fetch below
+            # even though headers.zip (no arch in its name) succeeds.
+            opencv_classifier: linuxarm64
           - classifier: linuxx86-64
             runner: ubuntu-24.04
             opencv_arch: x86-64
+            opencv_classifier: linuxx86-64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -73,35 +78,20 @@ jobs:
           java-version: ${{ env.JAVA_VERSION }}
 
       - name: Fetch WPILib-vendored OpenCV (headers + native)
-        # DIAGNOSTIC: this URL 404s deterministically (6/6 attempts incl.
-        # retries) from GitHub-hosted runners, on 3 separate CI runs, while
-        # the identical request succeeds every time from outside CI - so
-        # it's a GH-runner-IP-specific block/CDN-cache-miss, not transience
-        # or a wrong path (the artifact is confirmed present). This dumps
-        # full response headers/body for the failing request so we can see
-        # what's actually coming back (WAF challenge page? plain 404 from
-        # Artifactory itself?) before deciding on a real fix (e.g. mirroring
-        # the artifact into this repo/a release instead of hitting frcmaven
-        # from CI). Remove this diagnostic block once the cause is known.
+        # The frcmaven native-artifact classifier is "linux<arch>" (e.g.
+        # linuxx86-64, linuxarm64) - not the bare matrix.opencv_arch used
+        # for this repo's own linux/<arch>/shared jar layout below. Using
+        # the wrong one here 404s (confirmed via a response-header/body
+        # dump: headers.zip - no arch in its name - fetched fine with
+        # HTTP 200, while native.zip 404d on every retry, because it was
+        # requesting "...-x86-64.zip" instead of the real
+        # "...-linuxx86-64.zip").
         run: |
-          set -uo pipefail
+          set -euo pipefail
           mkdir -p opencv/headers opencv/native
-          url="$FRCMAVEN_OPENCV_BASE/$OPENCV_VERSION/opencv-cpp-$OPENCV_VERSION-headers.zip"
-          echo "GET $url"
-          code="$(curl -sS -L -D /tmp/headers.hdr -o /tmp/headers.body -w '%{http_code}' "$url")"
-          echo "final status: $code"
-          echo "--- response headers (all hops) ---"
-          cat /tmp/headers.hdr
-          echo "--- response body (first 2KB) ---"
-          head -c 2048 /tmp/headers.body
-          echo
-          if [ "$code" -ge 400 ]; then
-            echo "::error::diagnostic fetch failed with $code, see headers/body dump above"
-            exit 1
-          fi
-          cp /tmp/headers.body headers.zip
           curl_args=(-fsSL --retry 5 --retry-all-errors --retry-delay 3)
-          curl "${curl_args[@]}" "$FRCMAVEN_OPENCV_BASE/$OPENCV_VERSION/opencv-cpp-$OPENCV_VERSION-${{ matrix.opencv_arch }}.zip" -o native.zip
+          curl "${curl_args[@]}" "$FRCMAVEN_OPENCV_BASE/$OPENCV_VERSION/opencv-cpp-$OPENCV_VERSION-headers.zip" -o headers.zip
+          curl "${curl_args[@]}" "$FRCMAVEN_OPENCV_BASE/$OPENCV_VERSION/opencv-cpp-$OPENCV_VERSION-${{ matrix.opencv_classifier }}.zip" -o native.zip
           unzip -q headers.zip -d opencv/headers
           unzip -q native.zip -d opencv/native
           core_so="$(find opencv/native -name 'libopencv_core.so.*' | head -1)"
