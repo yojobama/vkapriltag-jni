@@ -73,21 +73,34 @@ jobs:
           java-version: ${{ env.JAVA_VERSION }}
 
       - name: Fetch WPILib-vendored OpenCV (headers + native)
-        # frcmaven.wpi.edu has 404d this exact, valid URL from GitHub-hosted
-        # runners on both CI runs to date (2026-08-31, 2026-09-11) despite
-        # the artifact existing and the identical request succeeding
-        # immediately from outside CI - almost certainly a transient
-        # Artifactory/CDN hiccup (redirects through a short-lived signed GCS
-        # URL) rather than a bad path. NOTE: do NOT "fix" this by spoofing a
-        # browser User-Agent - Artifactory serves its HTML UI page instead of
-        # the raw artifact to browser-like UAs, which silently corrupts the
-        # download (confirmed: -A "Mozilla/..." gets you an HTML page, not a
-        # zip). --retry handles the transient case without touching UA/Accept.
+        # DIAGNOSTIC: this URL 404s deterministically (6/6 attempts incl.
+        # retries) from GitHub-hosted runners, on 3 separate CI runs, while
+        # the identical request succeeds every time from outside CI - so
+        # it's a GH-runner-IP-specific block/CDN-cache-miss, not transience
+        # or a wrong path (the artifact is confirmed present). This dumps
+        # full response headers/body for the failing request so we can see
+        # what's actually coming back (WAF challenge page? plain 404 from
+        # Artifactory itself?) before deciding on a real fix (e.g. mirroring
+        # the artifact into this repo/a release instead of hitting frcmaven
+        # from CI). Remove this diagnostic block once the cause is known.
         run: |
-          set -euo pipefail
+          set -uo pipefail
           mkdir -p opencv/headers opencv/native
+          url="$FRCMAVEN_OPENCV_BASE/$OPENCV_VERSION/opencv-cpp-$OPENCV_VERSION-headers.zip"
+          echo "GET $url"
+          code="$(curl -sS -L -D /tmp/headers.hdr -o /tmp/headers.body -w '%{http_code}' "$url")"
+          echo "final status: $code"
+          echo "--- response headers (all hops) ---"
+          cat /tmp/headers.hdr
+          echo "--- response body (first 2KB) ---"
+          head -c 2048 /tmp/headers.body
+          echo
+          if [ "$code" -ge 400 ]; then
+            echo "::error::diagnostic fetch failed with $code, see headers/body dump above"
+            exit 1
+          fi
+          cp /tmp/headers.body headers.zip
           curl_args=(-fsSL --retry 5 --retry-all-errors --retry-delay 3)
-          curl "${curl_args[@]}" "$FRCMAVEN_OPENCV_BASE/$OPENCV_VERSION/opencv-cpp-$OPENCV_VERSION-headers.zip" -o headers.zip
           curl "${curl_args[@]}" "$FRCMAVEN_OPENCV_BASE/$OPENCV_VERSION/opencv-cpp-$OPENCV_VERSION-${{ matrix.opencv_arch }}.zip" -o native.zip
           unzip -q headers.zip -d opencv/headers
           unzip -q native.zip -d opencv/native
