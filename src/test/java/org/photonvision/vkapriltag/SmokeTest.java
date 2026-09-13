@@ -51,7 +51,7 @@ public final class SmokeTest {
         Pgm pgm = Pgm.read(pgmPath);
         System.out.println("Loaded " + pgmPath + " (" + pgm.width + "x" + pgm.height + ")");
 
-        long handle = VkAprilTagJNI.create(pgm.width, pgm.height, 2, family, 0, -1);
+        long handle = VkAprilTagJNI.create(pgm.width, pgm.height, 2, family, 0, -1, false);
         if (handle == 0) {
             System.out.println("create() FAILED: " + VkAprilTagJNI.getLastError());
             System.exit(1);

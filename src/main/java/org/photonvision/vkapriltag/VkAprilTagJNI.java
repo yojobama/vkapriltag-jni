@@ -49,12 +49,17 @@ public class VkAprilTagJNI {
      *     std::thread::hardware_concurrency()}, 1 is fully serial
      * @param deviceIndex a raw index from {@link #enumerateDevices}, or -1 to let the library
      *     auto-select (discrete &gt; integrated &gt; virtual &gt; CPU)
+     * @param refineEdges enables upstream apriltag.c's gradient-based edge refinement (vkapriltag
+     *     v1.4.0+, run via TagDecoder immediately before quad decode). Off by default upstream;
+     *     substantially improves corner accuracy (measured: corner RMS mean 0.840px -&gt; 0.024px)
+     *     at some extra per-quad CPU cost. Fixed for the lifetime of the returned handle, like
+     *     every other parameter here.
      * @return an opaque native handle for {@link #detect} and {@link #destroy}, or 0 on failure -
      *     check {@link #getLastError} for why
      */
     public static native long create(
             int width, int height, int decimation, String family, int cpuThreads,
-            int deviceIndex);
+            int deviceIndex, boolean refineEdges);
 
     /**
      * Validates a (width, height, decimation) triple against the same requirements {@link

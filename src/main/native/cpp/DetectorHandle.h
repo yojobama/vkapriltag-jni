@@ -70,7 +70,8 @@ bool ValidateGeometry(uint32_t width, uint32_t height, uint32_t decimation, std:
 std::unique_ptr<DetectorHandle> CreateDetector(uint32_t width, uint32_t height,
                                                uint32_t decimation,
                                                const std::string &family_name,
-                                               uint32_t cpu_threads, int32_t device_index);
+                                               uint32_t cpu_threads, int32_t device_index,
+                                               bool refine_edges);
 
 // Runs the full pipeline (GpuDetector::Detect -> QuadDecode::Decode ->
 // TagDecoder::Decode) on one CV_8UC1, continuous, width x height grayscale

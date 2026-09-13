@@ -113,7 +113,7 @@ JNIEXPORT jobjectArray JNICALL Java_org_photonvision_vkapriltag_VkAprilTagJNI_en
 
 JNIEXPORT jlong JNICALL Java_org_photonvision_vkapriltag_VkAprilTagJNI_create(
     JNIEnv *env, jclass, jint width, jint height, jint decimation, jstring family,
-    jint cpu_threads, jint device_index) {
+    jint cpu_threads, jint device_index, jboolean refine_edges) {
   if (width <= 0 || height <= 0) {
     SetLastError("width and height must be positive");
     return 0;
@@ -131,7 +131,8 @@ JNIEXPORT jlong JNICALL Java_org_photonvision_vkapriltag_VkAprilTagJNI_create(
   std::unique_ptr<DetectorHandle> handle =
       CreateDetector(static_cast<uint32_t>(width), static_cast<uint32_t>(height),
                     static_cast<uint32_t>(decimation), family_name,
-                    static_cast<uint32_t>(cpu_threads), static_cast<int32_t>(device_index));
+                    static_cast<uint32_t>(cpu_threads), static_cast<int32_t>(device_index),
+                    refine_edges == JNI_TRUE);
   if (handle == nullptr) return 0;
 
   // Ownership crosses into the raw jlong handle from here; destroy() below

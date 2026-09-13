@@ -16,7 +16,7 @@ endif()
 # see vkapriltag's EmbeddedShaders.h for why that matters to a JNI shim
 # specifically.
 # ---------------------------------------------------------------------------
-set(VKAPRILTAG_GIT_TAG "v1.3.1" CACHE STRING
+set(VKAPRILTAG_GIT_TAG "v1.4.1" CACHE STRING
     "vkapriltag tag to fetch")
 option(VKAPRILTAG_JNI_LOCAL_SOURCE
        "Build against a local vkapriltag checkout instead of fetching one (VKAPRILTAG_JNI_LOCAL_SOURCE_DIR)"

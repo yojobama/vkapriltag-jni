@@ -58,7 +58,8 @@ bool ValidateGeometry(uint32_t width, uint32_t height, uint32_t decimation, std:
 std::unique_ptr<DetectorHandle> CreateDetector(uint32_t width, uint32_t height,
                                                uint32_t decimation,
                                                const std::string &family_name,
-                                               uint32_t cpu_threads, int32_t device_index) {
+                                               uint32_t cpu_threads, int32_t device_index,
+                                               bool refine_edges) {
   ClearLastError();
 
   std::string reason;
@@ -81,11 +82,11 @@ std::unique_ptr<DetectorHandle> CreateDetector(uint32_t width, uint32_t height,
 
     handle->td = apriltag_detector_create();
     apriltag_detector_add_family(handle->td, handle->family);
-    // RefineEdges (camera-distortion based edge refinement) is out of scope
-    // for this detector - see TagDecoder.h - so make sure the fetched
-    // apriltag library doesn't try to run it against quads it never
-    // produced itself.
-    handle->td->refine_edges = false;
+    // RefineEdges (upstream apriltag.c's gradient-based edge refinement, run
+    // via TagDecoder as of vkapriltag v1.4.0 - see TagDecoder.h) is off by
+    // default to match this library's historical behavior; the caller
+    // (photon-core, via VkAprilTagPipelineSettings) opts in explicitly.
+    handle->td->refine_edges = refine_edges;
 
     handle->reversed_border = handle->family->reversed_border;
 
@@ -115,7 +116,12 @@ std::unique_ptr<DetectorHandle> CreateDetector(uint32_t width, uint32_t height,
 
     handle->detector = std::make_unique<apriltag_vulkan::GpuDetector>(*handle->ctx, config);
     handle->quad_decode = std::make_unique<apriltag_vulkan::QuadDecode>(config);
-    handle->tag_decoder = std::make_unique<apriltag_vulkan::TagDecoder>(handle->td);
+    // vkapriltag v1.4.0+: TagDecoder needs decimation to set td->quad_decimate
+    // on refine_edges's behalf (its search radius depends on it) - see
+    // TagDecoder.h. Passing cpu_threads through too, matching config.cpu_threads
+    // above instead of leaving it at TagDecoder's own default.
+    handle->tag_decoder =
+        std::make_unique<apriltag_vulkan::TagDecoder>(handle->td, decimation, cpu_threads);
 
     return handle;
   } catch (const std::exception &e) {
